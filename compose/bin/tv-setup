@@ -1,0 +1,72 @@
+#!/bin/bash
+set -o errexit
+
+MEM=$(docker info | grep "Total Memory" | cut -d':' -f2 | xargs | sed s/GiB//)
+# Docker reports RAM 0.2 less than what it is actually set to
+(( $(echo "$MEM < 5.8" | bc -l) )) && echo "There must be at least 6GB of RAM allocated to Docker to continue." && exit
+
+# shellcheck source=../env/db.env
+source env/db.env
+# shellcheck source=../env/elasticsearch.env
+source env/elasticsearch.env
+# shellcheck source=../env/magento.env
+source env/magento.env
+# shellcheck source=../env/rabbitmq.env
+source env/rabbitmq.env
+
+DOMAIN=${1:-magento.test}
+
+bin/stop
+
+docker-compose -f docker-compose.yml up -d
+[ $? != 0 ] && echo "Failed to start Docker services" && exit
+
+bin/clinotty chmod u+x bin/magento
+#rm -rf src && mkdir src
+
+echo "Waiting for connection to Elasticsearch..."
+bin/clinotty timeout $ES_HEALTHCHECK_TIMEOUT bash -c "
+    until curl --silent --output /dev/null http://$ES_HOST:$ES_PORT/_cat/health?h=st; do
+        printf '.'
+        sleep 2
+    done"
+[ $? != 0 ] && echo "Failed to connect to Elasticsearch" && exit
+
+echo ""
+echo "Waiting for connection to RabbitMQ..."
+bin/clinotty timeout $RABBITMQ_HEALTHCHECK_TIMEOUT bash -c "
+    until curl --silent --output /dev/null http://$RABBITMQ_DEFAULT_USER:$RABBITMQ_DEFAULT_PASS@$RABBITMQ_HOST:$RABBITMQ_MANAGEMENT_PORT/api/aliveness-test/%2F; do
+        printf '.'
+        sleep 2
+    done"
+[ $? != 0 ] && echo "Failed to connect to RabbitMQ" && exit
+
+echo "$MYSQL_HOST => $MYSQL_DATABASE => $MYSQL_PASSWORD"
+
+
+
+#echo "Copying files from container to host after install..."
+#bin/copyfromcontainer --all
+
+#echo "Forcing deploy of static content to speed up initial requests..."
+#bin/clinotty bin/magento setup:static-content:deploy -f
+
+echo "Re-indexing with Elasticsearch..."
+bin/clinotty bin/magento indexer:reindex
+
+echo "Setting basic URL and generating SSL certificate..."
+bin/setup-domain "${DOMAIN}"
+
+echo "Clearing the cache to apply updates..."
+bin/clinotty bin/magento cache:flush
+
+echo "Installing cron, run 'bin/cron start' to enable..."
+bin/clinotty bin/magento cron:install
+
+echo "Turning on developer mode..."
+bin/clinotty bin/magento deploy:mode:set developer
+
+mv .vscode src/
+
+echo "Docker development environment setup complete."
+echo "You may now access your Magento instance at https://${DOMAIN}/"
