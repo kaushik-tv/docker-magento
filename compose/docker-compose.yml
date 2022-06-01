@@ -31,6 +31,7 @@ services:
 
   phpfpm:
     image: markoshust/magento-php:8.1-fpm-1
+    #hostname: vanilla.test.php SetHostName same as PHP IDE Config
     volumes: *appvolumes
     env_file: env/phpfpm.env
     #extra_hosts: *appextrahosts

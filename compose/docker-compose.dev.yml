@@ -18,3 +18,6 @@ services:
 
   phpfpm:
     volumes: *appvolumes
+    environment:
+      #PHP_IDE_CONFIG: serverName=vanilla.test.php  Set phpIDEConfig
+      XDEBUG_CONFIG: "idekey=PHPSTORM-XDEBUG remote_port=9003"
